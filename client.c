@@ -10,6 +10,7 @@
 #include <arpa/inet.h>
 #include <stdio_ext.h>
 #include <termios.h>
+#include <time.h>
 
 #define PORT 3490 
 #define MAXDATASIZE 1000
@@ -18,6 +19,7 @@
 void recibirArchivo(void);
 void enviarArchivo(void);
 void clean_stdin_fgets(void);
+void clean_stdin(void);
 
 int sockfd = 0;
 
@@ -57,12 +59,11 @@ int main(int argc, char *argv[])
 		close(sockfd);
 		exit(1);
 	}
-    system("clear");
+
     //inicio de conexion--------------------------------------------------------------------
     opcion = 5;
     while(opcion != 0)
     {
-        
         printf("Conexion con %s\n", argv[1]);
         printf("Esperando al servidor...\n");
         //recibo la opcion que eligio el servidor
@@ -71,7 +72,6 @@ int main(int argc, char *argv[])
             perror("recv");
        	    exit(1);
    	    }
-        system("clear");
         if(opcion == 1)
         recibirArchivo();
         else if(opcion == 2)
@@ -85,10 +85,11 @@ int main(int argc, char *argv[])
 
 void recibirArchivo(void)
 {
-    int numbytes = 0, bufsize = 0, aux = 0, porcentaje = -10, i = 0;
-    unsigned long filesize = 0;
-    char buf[MAXDATASIZE], filename[FILENAMEMAXLEN], c; 
+    int numbytes = 0, bufsize = 0, aux = 0, getcharAux = 0;
+    unsigned long filesize = 0, aux1 = 0;
+    char buf[MAXDATASIZE], filename[FILENAMEMAXLEN];
     FILE *fd;
+    time_t antes = 0, ahora = 0;
 
     system("clear");
     printf("El server eligio enviarle un archivo\n");
@@ -112,13 +113,28 @@ void recibirArchivo(void)
     printf("El server le enviara el archivo llamado \"%s\"\n", buf);
 
     do{
-    printf("Ingrese el nombre del archivo a guardar(incluya la extension): ");
-    clean_stdin_fgets();
-    fgets(filename, FILENAMEMAXLEN, stdin);
-    filename[strcspn(filename, "\n")] = '\0';//le saco el \n
+        printf("Ingrese el nombre del archivo a guardar(incluya la extension): ");
+        clean_stdin_fgets();
+        fgets(filename, FILENAMEMAXLEN, stdin);
+        filename[strcspn(filename, "\n")] = '\0';//le saco el \n
+        
+        if(fopen(filename, "r")!= NULL)
+        {
+            printf("Ya existe un archivo con ese nombre en la carpeta\n");
+            printf("Desea sobreescribirlo?(s/n)\n");
 
-    if(fopen(filename, "r")!= NULL)
-    printf("Ya existe un archivo con ese nombre en la carpeta\n");
+            while(getcharAux != 'n'&& getcharAux != 's')
+            {
+                clean_stdin_fgets();
+                fgets(buf, 4, stdin);
+                getcharAux = buf[0];
+                if(getcharAux == 's')
+                break;
+            }
+        }
+        if(getcharAux == 's')
+        break;
+        
     }while(fopen(filename, "r")!= NULL);
 
     //recibo 0 si el server pudo abrir el archivo
@@ -148,31 +164,53 @@ void recibirArchivo(void)
             close(sockfd);
        	    exit(1);
    	    }
-
-        porcentaje = -10;
-        //recibo byte por byte
-        for(i = 0; i < filesize; i++)
+        aux1 = 0;
+        antes = time(NULL);
+        while(filesize > aux1)
         {
-            if ((numbytes = recv( sockfd , &c, sizeof(char),  0 )) == -1  )
+            //recibo MAXDATASIZE bytes o, en su defecto,
+            //la cantidad de bytes restantes.
+            if(aux1 < (filesize - MAXDATASIZE)){
+                if ((numbytes = recv( sockfd , buf, MAXDATASIZE,  0 )) == -1  )
+                {
+                    perror("recv");
+                    fclose(fd);
+                    close(sockfd);
+       	            exit(1);
+   	            }
+            }
+            else{
+                if ((numbytes = recv( sockfd , buf, (filesize - aux1),  0 )) == -1  )
+                {
+                    perror("recv");
+                    fclose(fd);
+                    close(sockfd);
+       	            exit(1);
+   	            }
+            }
+            fwrite(buf, 1, numbytes, fd);
+            aux1 +=numbytes;
+
+            ahora = time(NULL);
+            if(ahora != antes)//imprimo porcentaje cada 1 segundo
             {
-                perror("recv");
-                fclose(fd);
-                close(sockfd);
-       	        exit(1);
-   	        }
-            fputc(c, fd);
-            //imprimo un porcentaje del progreso
-            if(i %(filesize /10) == 0 && porcentaje < 100)
-            {
-                porcentaje+=10;
                 system("clear");
                 printf("Recibiendo archivo\n");
-                printf("%d%% completado\n", porcentaje);
+                printf("%ld%% completado\n", (100*aux1)/filesize);
             }
+            antes = time(NULL);   
         }
-        fputc(EOF, fd);
-        fclose(fd);
+        system("clear");
+
+        if(filesize != aux1)
+        {
+            remove(filename);
+            printf("Error al recibir el archivo\nIntente nuevamente\n");
+        }
+        else
         printf("Se ha recibido y guardado satisfactoriamente el archivo \"%s\"\n\n", filename);
+
+        fclose(fd);        
     }
     else if(aux == 0)//si no pude crear el archivo
     {
@@ -189,14 +227,14 @@ void recibirArchivo(void)
 
 void enviarArchivo(void)
 {
-    char filename[FILENAMEMAXLEN], c;
-    int aux = 0, numbytes = 0, porcentaje = 0, i = 0;
-    unsigned long filesize = 0, filesizeAux = 0;
+    char filename[FILENAMEMAXLEN], buf[MAXDATASIZE];
+    int aux = 0, numbytes = 0;
+    unsigned long filesize = 0, filesizeAux = 0, aux1 = 0;
     FILE *fd;
-
+    time_t ahora = 0, antes = 0;
+    
     system("clear");
     printf("El server eligio recibir un archivo suyo\n");
-
     do{
     printf("Introduzca el nombre del archivo a enviar(incluir extension): ");
     clean_stdin_fgets();
@@ -232,8 +270,8 @@ void enviarArchivo(void)
         if ( ( numbytes = send(sockfd, &aux, sizeof(int), 0) ) == -1 )
         {
             perror("send");
-            fclose(fd);
             close(sockfd);
+            fclose(fd);
             exit(1);
         }
 
@@ -248,42 +286,65 @@ void enviarArchivo(void)
 
         if(aux == 0)//envio el archivo
         {
-            //calculo el tamaño del archivo
-            for(filesize = -1; feof(fd) == 0; filesize++)
-            fgetc(fd);
+            fseek (fd , 0 , SEEK_END);
+            filesize = ftell (fd);
+            rewind (fd);
             //envio el tamaño
             if ( ( numbytes = send(sockfd, &filesize, sizeof(long), 0) ) == -1 )
             {
                 perror("send");
-                fclose(fd);
                 close(sockfd);
+                fclose(fd);
                 exit(1);
             }
 
-            fseek(fd,0,SEEK_SET);
-            porcentaje = -10;
-            for(i = 0; i < filesize; i++)
+            aux1 = 0;
+            filesizeAux = filesize;
+            antes = time(NULL);
+            while(aux1 != filesize)
             {
-                c = fgetc(fd);
-                if ( ( numbytes = send(sockfd, &c, sizeof(char), 0) ) == -1 )
+                //envio MAXDATASIZE bytes o, en su defecto,
+                //la cantidad de bytes restantes.
+                if(filesizeAux >MAXDATASIZE)
                 {
-                    perror("send");
-                    fclose(fd);
-                    close(sockfd);
-                    exit(1);
+                    fread(buf, 1,MAXDATASIZE, fd);
+                    if ( ( numbytes = send(sockfd,buf, MAXDATASIZE, 0) ) == -1 )
+                    {
+                        perror("send");
+                        close(sockfd);
+                        fclose(fd);
+                        exit(1);
+                    }
                 }
-                if(i %(filesize /10) == 0 && porcentaje < 100)
+                else
                 {
-                 porcentaje+=10;
+                    fread(buf, 1,filesizeAux, fd);
+                    if ( ( numbytes = send(sockfd, buf, filesizeAux, 0) ) == -1 )
+                    {
+                        perror("send");
+                        close(sockfd);
+                        fclose(fd);
+                        exit(1);
+                    }
+                }
+                //aumento variables
+                aux1 +=numbytes;
+                filesizeAux-=numbytes;
+
+                ahora = time(NULL);
+                if(ahora != antes)//imprimo porcentaje cada 1 segundo
+                {
                     system("clear");
                     printf("Enviando archivo\n");
-                    printf("%d%% completado\n", porcentaje);
+                    printf("%ld%% completado\n", (100*aux1)/filesize);
                 }
+                antes = time(NULL);                
             }
+            system("clear");
             printf("El archivo \"%s\" se ha enviado satisfactoriamente\n\n", filename);
         }
         else if(aux == -1)//error en el server
-        printf("El cliente no pudo crear el archivo a guardar\n");
+        printf("El server no pudo crear el archivo a guardar\n");
 
         fclose(fd);
     }
@@ -293,8 +354,8 @@ void enviarArchivo(void)
         if ( ( numbytes = send(sockfd, &aux, sizeof(int), 0) ) == -1 )
         {
             perror("send");
-            fclose(fd);
             close(sockfd);
+            fclose(fd);
             exit(1);
         }
         printf("Error al abrir el archivo \"%s\"\n", filename);
@@ -308,4 +369,13 @@ void clean_stdin_fgets(void)
     tcdrain(stdin_copy);
     tcflush(stdin_copy, TCIFLUSH);
     close(stdin_copy);
+}
+
+void clean_stdin(void)
+{
+    //limpia el stdin para usarlo con getchar
+    int c;
+    do {
+        c = getchar();
+    } while (c != '\n' && c != EOF);
 }

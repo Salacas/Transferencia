@@ -16,7 +16,7 @@
 #define MYPORT 3490
 #define BACKLOG 0
 #define FILENAMEMAXLEN 100
-#define MAXDATASIZE 100
+#define MAXDATASIZE 1000
 
 int sockfd = 0, new_fd = 0;
 
@@ -31,7 +31,6 @@ int main( void )
 	struct sockaddr_in their_addr;
 	socklen_t sin_size;
 	int yes = 1, numbytes = 0, opcion = 0;
-    char buf[MAXDATASIZE];
 	if ( ( sockfd = socket( AF_INET , SOCK_STREAM , 0 ) ) == -1) 
 	{
 		perror("socket");
@@ -118,11 +117,12 @@ int main( void )
 
 void enviarArchivo(void)
 {
-    char filename[FILENAMEMAXLEN], buf[MAXDATASIZE], c;
-    int aux = 0, numbytes = 0, porcentaje = -10, i = 0;
-    unsigned long filesize = 0, filesizeAux = 0;
+    char filename[FILENAMEMAXLEN], buf[MAXDATASIZE];
+    int aux = 0, numbytes = 0;
+    unsigned long filesize = 0, filesizeAux = 0, aux1 = 0;
     FILE *fd;
-
+    time_t ahora = 0, antes = 0;
+    
     system("clear");
 
     do{
@@ -180,39 +180,63 @@ void enviarArchivo(void)
 
         if(aux == 0)//envio el archivo
         {
-            //calculo el tamaño del archivo
-            for(filesize = -1; feof(fd) == 0; filesize++)
-            fgetc(fd);
+        
+            fseek (fd , 0 , SEEK_END);
+            filesize = ftell (fd);
+            rewind (fd);
             //envio el tamaño
             if ( ( numbytes = send(new_fd, &filesize, sizeof(long), 0) ) == -1 )
             {
                 perror("send");
+                close(new_fd);
                 fclose(fd);
                 close(sockfd);
-                close(new_fd);
                 exit(1);
             }
 
-            fseek(fd,0,SEEK_SET);
-            porcentaje = -10;
-            for(i = 0; i < filesize; i++)
+            aux1 = 0;
+            filesizeAux = filesize;
+            antes = time(NULL);
+            while(aux1 != filesize)
             {
-                c = fgetc(fd);
-                if ( ( numbytes = send(new_fd, &c, sizeof(char), 0) ) == -1 )
+                //envio MAXDATASIZE bytes o, en su defecto,
+                //la cantidad de bytes restantes.
+                if(filesizeAux >MAXDATASIZE)
                 {
-                    perror("send");
-                    fclose(fd);
-                    close(sockfd);
-                    close(new_fd);
-                    exit(1);
+                    fread(buf, 1,MAXDATASIZE, fd);
+                    if ( ( numbytes = send(new_fd,buf, MAXDATASIZE, 0) ) == -1 )
+                    {
+                        perror("send");
+                        close(new_fd);
+                        fclose(fd);
+                        close(sockfd);
+                        exit(1);
+                    }
                 }
-                if(i %(filesize /10) == 0 && porcentaje < 100)
+                else
                 {
-                    porcentaje+=10;
+                    fread(buf, 1,filesizeAux, fd);
+                    if ( ( numbytes = send(new_fd, buf, filesizeAux, 0) ) == -1 )
+                    {
+                        perror("send");
+                        close(new_fd);
+                        fclose(fd);
+                        close(sockfd);
+                        exit(1);
+                    }
+                }
+                //aumento variables
+                aux1 +=numbytes;
+                filesizeAux-=numbytes;
+
+                ahora = time(NULL);
+                if(ahora != antes)//imprimo porcentaje cada 1 segundo
+                {
                     system("clear");
                     printf("Enviando archivo\n");
-                    printf("%d%% completado\n", porcentaje);
+                    printf("%ld%% completado\n", (100*aux1)/filesize);
                 }
+                antes = time(NULL);                
             }
             printf("El archivo \"%s\" se ha enviado satisfactoriamente\n\n", filename);
         }
@@ -238,15 +262,18 @@ void enviarArchivo(void)
 
 void recibirArchivo(void)
 {
-    int numbytes = 0, bufsize = 0, aux = 0, porcentaje = 0, i = 0;
-    unsigned long filesize = 0;
-    char buf[FILENAMEMAXLEN], filename[FILENAMEMAXLEN], c; 
+    int numbytes = 0, bufsize = 0, aux = 0;
+    unsigned long filesize = 0, aux1 = 0;
+    char buf[MAXDATASIZE], filename[FILENAMEMAXLEN];
     FILE *fd;
+    time_t antes = 0, ahora = 0;
+
+    system("clear");
+    printf("Esperando al cliente...\n");
     //recibo cantidad de bytes a recibir en el proximo recv
     if ((numbytes = recv( new_fd , &bufsize, sizeof(int),  0 )) == -1  )
     {
         perror("recv");
-        close(sockfd);
         close(new_fd);
        	exit(1);
    	}
@@ -254,8 +281,8 @@ void recibirArchivo(void)
     if ((numbytes = recv( new_fd , buf, bufsize,  0 )) == -1  )
     {
         perror("recv");
-        close(new_fd);
         close(sockfd);
+        close(new_fd);
        	exit(1);
    	}
     buf[numbytes]='\0';
@@ -270,7 +297,6 @@ void recibirArchivo(void)
 
     if(fopen(filename, "r")!= NULL)
     printf("Ya existe un archivo con ese nombre en la carpeta\n");
-
     }while(fopen(filename, "r")!= NULL);
 
     //recibo 0 si el cliente pudo abrir el archivo
@@ -278,8 +304,8 @@ void recibirArchivo(void)
     if ((numbytes = recv( new_fd , &aux, sizeof(int),  0 )) == -1  )
     {
         perror("recv");
-        close(new_fd);
         close(sockfd);
+        close(new_fd);
        	exit(1);
    	}
 
@@ -290,45 +316,69 @@ void recibirArchivo(void)
         if ( ( numbytes = send(new_fd, &aux, sizeof(int), 0) ) == -1 )
         {
             perror("send");
-            close(new_fd);
             close(sockfd);
+            close(new_fd);
             exit(1);
         } 
         //recibo la cantidad de bytes del archivo a recibir
         if ((numbytes = recv( new_fd , &filesize, sizeof(long),  0 )) == -1  )
         {
             perror("recv");
+            close(sockfd);
             fclose(fd);
             close(new_fd);
-            close(sockfd);
        	    exit(1);
    	    }
         
-        porcentaje = -10;
-        //recibo byte por byte
-        for(i = 0; i < filesize; i++)
+        aux1 = 0;
+        antes = time(NULL);
+        while(filesize > aux1)
         {
-            if ((numbytes = recv( new_fd , &c, sizeof(char),  0 )) == -1  )
+            //recibo MAXDATASIZE bytes o, en su defecto,
+            //la cantidad de bytes restantes.
+            if(aux1 < (filesize - MAXDATASIZE)){
+                if ((numbytes = recv( new_fd , buf, MAXDATASIZE,  0 )) == -1  )
+                {
+                    perror("recv");
+                    close(sockfd);
+                    fclose(fd);
+                    close(new_fd);
+       	            exit(1);
+   	            }
+            }
+            else{
+                if ((numbytes = recv( new_fd , buf, (filesize - aux1),  0 )) == -1  )
+                {
+                    perror("recv");
+                    close(sockfd);
+                    fclose(fd);
+                    close(new_fd);
+       	            exit(1);
+   	            }
+            }
+            fwrite(buf, 1, numbytes, fd);
+            aux1 +=numbytes;
+
+            ahora = time(NULL);
+            if(ahora != antes)//imprimo porcentaje cada 1 segundo
             {
-                perror("recv");
-                fclose(fd);
-                close(new_fd);
-                close(sockfd);
-       	        exit(1);
-   	        }
-            fputc(c, fd);
-            //imprimo un porcentaje del progreso
-            if(i %(filesize /10) == 0 && porcentaje < 100)
-            {
-                porcentaje+=10;
                 system("clear");
                 printf("Recibiendo archivo\n");
-                printf("%d%% completado\n", porcentaje);
+                printf("%ld%% completado\n", (100*aux1)/filesize);
             }
+            antes = time(NULL);   
         }
-        fputc(EOF, fd);
-        fclose(fd);
+        system("clear");
+
+        if(filesize != aux1)
+        {
+            remove(filename);
+            printf("Error al recibir el archivo\nIntente nuevamente\n");
+        }
+        else
         printf("Se ha recibido y guardado satisfactoriamente el archivo \"%s\"\n\n", filename);
+
+        fclose(fd);        
     }
     else if(aux == 0)//si no pude crear el archivo
     {
@@ -336,8 +386,8 @@ void recibirArchivo(void)
         if ( ( numbytes = send(new_fd, &aux, sizeof(int), 0) ) == -1 )
         {
             perror("send");
-            close(new_fd);
             close(sockfd);
+            close(new_fd);
             exit(1);
         } 
         printf("Error al crear el archivo \"%s\"\n", filename);
